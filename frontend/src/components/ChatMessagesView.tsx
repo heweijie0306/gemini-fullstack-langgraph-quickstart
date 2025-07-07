@@ -12,6 +12,7 @@ import {
   ActivityTimeline,
   ProcessedEvent,
 } from "@/components/ActivityTimeline"; // Assuming ActivityTimeline is in the same dir or adjust path
+import { SlideDisplay } from "@/components/SlideDisplay";
 
 // Markdown component props type from former ReportView
 type MdComponentProps = {
@@ -186,6 +187,9 @@ const AiMessageBubble: React.FC<AiMessageBubbleProps> = ({
     isLastMessage && isOverallLoading ? liveActivity : historicalActivity;
   const isLiveActivityForThisBubble = isLastMessage && isOverallLoading;
 
+  // Check if this message contains slides
+  const hasSlides = (message as any).additional_kwargs?.slides && Array.isArray((message as any).additional_kwargs.slides);
+
   return (
     <div className={`relative break-words flex flex-col`}>
       {activityForThisBubble && activityForThisBubble.length > 0 && (
@@ -196,11 +200,26 @@ const AiMessageBubble: React.FC<AiMessageBubbleProps> = ({
           />
         </div>
       )}
-      <ReactMarkdown components={mdComponents}>
-        {typeof message.content === "string"
-          ? message.content
-          : JSON.stringify(message.content)}
-      </ReactMarkdown>
+      
+      {/* Regular message content */}
+      <div className="mb-4">
+        <ReactMarkdown components={mdComponents}>
+          {typeof message.content === "string"
+            ? message.content
+            : JSON.stringify(message.content)}
+        </ReactMarkdown>
+      </div>
+
+      {/* Slide display if slides are present */}
+      {hasSlides && (
+        <div className="mb-4">
+                     <SlideDisplay 
+             slides={(message as any).additional_kwargs.slides} 
+             mdComponents={mdComponents}
+           />
+        </div>
+      )}
+
       <Button
         variant="default"
         className="cursor-pointer bg-neutral-700 border-neutral-600 text-neutral-300 self-end"

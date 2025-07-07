@@ -14,14 +14,20 @@ from typing_extensions import Annotated
 
 class OverallState(TypedDict):
     messages: Annotated[list, add_messages]
+    task_list: Annotated[list, operator.add]
+    text_response: str
     search_query: Annotated[list, operator.add]
     web_research_result: Annotated[list, operator.add]
     sources_gathered: Annotated[list, operator.add]
+    outline_list: Annotated[list, operator.add]
+    slides: Annotated[list, operator.add]
+    sorted_slides: Annotated[list, operator.add]
+    slide_count: int
     initial_search_query_count: int
     max_research_loops: int
     research_loop_count: int
     reasoning_model: str
-
+    summary: str
 
 class ReflectionState(TypedDict):
     is_sufficient: bool
@@ -29,7 +35,7 @@ class ReflectionState(TypedDict):
     follow_up_queries: Annotated[list, operator.add]
     research_loop_count: int
     number_of_ran_queries: int
-
+    summary: str
 
 class Query(TypedDict):
     query: str
@@ -43,6 +49,17 @@ class QueryGenerationState(TypedDict):
 class WebSearchState(TypedDict):
     search_query: str
     id: str
+
+
+class OutlineGenerationState(TypedDict):
+    outline_list: list[str]
+
+
+class SlideGenerationState(TypedDict):
+    outline_topic: str
+    slide_id: int
+    messages: Annotated[list, add_messages]
+    web_research_result: Annotated[list, operator.add]
 
 
 @dataclass(kw_only=True)

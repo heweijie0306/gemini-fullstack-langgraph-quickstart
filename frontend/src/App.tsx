@@ -53,11 +53,25 @@ export default function App() {
         processedEvent = {
           title: "Reflection",
           data: event.reflection.is_sufficient
-            ? "Search successful, generating final answer."
+            ? "Search successful, generating presentation outline."
             : `Need more information, searching for ${event.reflection.follow_up_queries.join(
                 ", "
               )}`,
         };
+      } else if (event.generate_outline) {
+        const outlines = event.generate_outline.outline_list || [];
+        processedEvent = {
+          title: "Generating Presentation Outline",
+          data: `Created ${outlines.length} slide topics: ${outlines.slice(0, 3).join(", ")}${outlines.length > 3 ? "..." : ""}`,
+        };
+      } else if (event.generate_slides) {
+        const slide = event.generate_slides.slides?.[0];
+        processedEvent = {
+          title: "Generating Slide Content",
+          data: slide ? `Created slide: "${slide.title}"` : "Generating slide content...",
+        };
+        // Mark as finalized when slides are generated
+        hasFinalizeEventOccurredRef.current = true;
       } else if (event.finalize_answer) {
         processedEvent = {
           title: "Finalizing Answer",

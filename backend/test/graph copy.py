@@ -1,10 +1,6 @@
 import os
-import re
-from datetime import datetime
-from pathlib import Path
-from typing import List, Dict, Any, Optional
 
-from agent.tools_and_schemas import SearchQueryList, Reflection, OutlineList, SlideContent, TaskList
+from agent.tools_and_schemas import SearchQueryList, Reflection, OutlineList, SlideContent
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage
 from langgraph.types import Send
@@ -31,7 +27,6 @@ from agent.prompts import (
     answer_instructions,
     outline_generation_instructions,
     slide_generation_instructions,
-    task_list_generation_instructions,
 )
 from langchain_google_genai import ChatGoogleGenerativeAI
 from agent.utils import (
@@ -41,65 +36,20 @@ from agent.utils import (
     resolve_urls,
 )
 
-def get_gemini_client():
-    return Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+# def get_gemini_client():
+#     return Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 def get_llm(model: str, temperature: float = 0):
     llm = ChatOpenAI(
         model=model,
         api_key=os.getenv("OPENROUTER_API_KEY"),
-        base_url="https://openrouter.ai/api/v1",
+        base_url=os.getenv("OPENROUTER_BASE_URL"),
         temperature=temperature,
     )
     return llm
 
 # Nodes
-def generate_task_list(state: OverallState, config: RunnableConfig) -> OverallState:
-    """LangGraph node that generates a task list based on the user's question.
-
-    Uses Gemini 2.0 Flash to create a task list based on the user's question.
-    """
-    configurable = Configuration.from_runnable_config(config)
-    reasoning_model = state.get("reasoning_model") or configurable.reasoning_model
-    # Format the prompt
-    current_date = get_current_date()
-    formatted_prompt = task_list_generation_instructions.format(
-        current_date=current_date,
-        state=state,
-    )
-    llm = get_llm(reasoning_model, 1.0)
-    result = llm.with_structured_output(TaskList).invoke(formatted_prompt)
-    return {"task_list": result.tasks, "text_response": result.text_response}
-
-def continue_to_web_next_task(state: OverallState):
-    """Router that ensures proper task execution sequence: ContextSearch → GenerateOutline → GenerateSlides"""
-    remaining_tasks = [task for task in state.get("task_list", [])]
-    
-    # Enforce sequence: Search must come first if present
-    if any(task.task == "ContextSearch" for task in remaining_tasks):
-        # Remove ContextSearch task from the list
-        remaining_tasks = [task for task in remaining_tasks if task.task != "ContextSearch"]
-        state["task_list"] = remaining_tasks
-        return "start_web_research"
-    
-    # Then GenerateOutline (only after ContextSearch is done or not present)
-    elif any(task.task == "GenerateOutline" for task in remaining_tasks):
-        # Remove GenerateOutline task from the list
-        remaining_tasks = [task for task in remaining_tasks if task.task != "GenerateOutline"]
-        state["task_list"] = remaining_tasks
-        return "generate_outline"
-    
-    # Finally GenerateSlides (only after previous tasks are done or not present)
-    elif any(task.task == "GenerateSlides" for task in remaining_tasks):
-        # Remove GenerateSlides task from the list
-        remaining_tasks = [task for task in remaining_tasks if task.task != "GenerateSlides"]
-        state["task_list"] = remaining_tasks
-        return "generate_slides"
-    
-    # No more tasks - end the workflow
-    else:
-        return END
-
 def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
     """LangGraph node that generates a search queries based on the User's question.
 
@@ -167,7 +117,7 @@ def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
 
     # Uses the google genai client as the langchain client doesn't return grounding metadata
     response = genai_client.models.generate_content(
-        model="gemini-2.0-flash",
+        model=configurable.query_generator_model,
         contents=formatted_prompt,
         config={
             "tools": [{"google_search": {}}],
@@ -188,6 +138,7 @@ def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
         "search_query": [state["search_query"]],
         "web_research_result": [modified_text],
     }
+
 
 def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
     """LangGraph node that identifies knowledge gaps and generates potential follow-up queries.
@@ -225,7 +176,6 @@ def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
         "follow_up_queries": result.follow_up_queries,
         "research_loop_count": state["research_loop_count"],
         "number_of_ran_queries": len(state["search_query"]),
-        "summary": result.summary,
     }
 
 
@@ -296,25 +246,14 @@ def generate_outline(state: OverallState, config: RunnableConfig) -> OutlineGene
 
     return {"outline_list": result.outlines}
 
-def human_eval_outline(state: OverallState, config: RunnableConfig) -> OverallState:
-    """LangGraph node that evaluates the outline and asks for human feedback.
 
-    Uses Gemini 2.0 Flash to evaluate the outline and asks for human feedback.
-    """
-    return {"outline_evaluation_result": "outline_evaluation_result"}
-
-def continue_to_slide_generation(state: OverallState):
+def continue_to_slide_generation(state: OutlineGenerationState):
     """LangGraph node that sends outlines to slide generation nodes.
 
     This is used to spawn n number of slide generation nodes, one for each outline.
     """
     return [
-        Send("generate_slides", {
-            "outline_topic": outline, 
-            "slide_id": int(idx),
-            "messages": state["messages"],
-            "web_research_result": state["web_research_result"]
-        })
+        Send("generate_slides", {"outline_topic": outline, "slide_id": int(idx)})
         for idx, outline in enumerate(state["outline_list"])
     ]
 
@@ -339,191 +278,61 @@ def generate_slides(state: OverallState, config: RunnableConfig) -> OverallState
     current_date = get_current_date()
     formatted_prompt = slide_generation_instructions.format(
         current_date=current_date,
+        research_topic=get_research_topic(state["messages"]),
         outline_topic=state["outline_topic"],
         summaries="\n---\n\n".join(state["web_research_result"]),
     )
 
     # init Reasoning Model
     llm = get_llm(reasoning_model, 0.3)
-    result = llm.invoke(formatted_prompt)
+    result = llm.with_structured_output(SlideContent).invoke(formatted_prompt)
 
     slide_data = {
-        "slide_id": state["slide_id"],     
+        "slide_id": state["slide_id"],
+        "title": result.title,
         "content": result.content,
         "outline_topic": state["outline_topic"]
     }
 
     return {"slides": [slide_data]}
 
-
-def gather_slides(state: OverallState, config: RunnableConfig) -> OverallState:
-    """LangGraph node that gathers and sorts all generated slides by slide ID.
-
-    Takes all the accumulated slides from parallel slide generation and sorts them
-    by slide_id to ensure proper ordering in the final output.
-
-    Args:
-        state: Current graph state containing all generated slides
-        config: Configuration for the runnable (not used in this function)
-
-    Returns:
-        Dictionary with state update, including sorted_slides with ordered slide content
-    """
-    # Sort slides by slide_id to ensure proper ordering
-    sorted_slides = sorted(state.get("slides", []), key=lambda x: x["slide_id"])
-    
-    # Create output with just content ordered by slide_id
-    slide_contents = []
-    for slide in sorted_slides:
-        slide_contents.append({
-            "content": slide["content"],
-        })
-
-    
-    return {
-        "sorted_slides": slide_contents,
-        "slide_count": len(slide_contents)
-    }
-
-def check_remaining_tasks(state: OverallState) -> OverallState:
-    """Simple pass-through node to check remaining tasks after web research"""
-    return state
-
 def graph_builder(genai_client: Client):
     # Create our Agent Graph
     builder = StateGraph(OverallState, config_schema=Configuration)
 
-    # Define the nodes
-    builder.add_node("generate_task_list", generate_task_list)
+    # Define the nodes we will cycle between
     builder.add_node("generate_query", generate_query)
     builder.add_node("web_research", web_research)
     builder.add_node("reflection", reflection)
     builder.add_node("generate_outline", generate_outline)
     builder.add_node("generate_slides", generate_slides)
-    builder.add_node("gather_slides", gather_slides)
 
-    # Entry point
-    builder.add_edge(START, "generate_task_list")
-    
-    # Route to next task based on task list
-    builder.add_conditional_edges(
-        "generate_task_list", 
-        continue_to_web_next_task, 
-        ["start_web_research", "generate_outline", "generate_slides", END]
-    )
-    
-    # Web research flow (when ContextSearch task is selected)
-    builder.add_edge("start_web_research", "generate_query")
+    # Set the entrypoint as `generate_query`
+    # This means that this node is the first one called
+    builder.add_edge(START, "generate_query")
+    # Add conditional edge to continue with search queries in a parallel branch
     builder.add_conditional_edges(
         "generate_query", continue_to_web_research, ["web_research"]
     )
+    # Reflect on the web research
     builder.add_edge("web_research", "reflection")
+    # Evaluate the research
     builder.add_conditional_edges(
-        "reflection", evaluate_research, ["web_research", "check_remaining_tasks"]
+        "reflection", evaluate_research, ["web_research", "generate_outline"]
     )
-    
-    # After web research completes, check for remaining tasks
+    # Generate outline for slides
     builder.add_conditional_edges(
-        "check_remaining_tasks",
-        continue_to_web_next_task,
-        ["start_web_research", "generate_outline", "generate_slides", END]
+        "generate_outline", continue_to_slide_generation, ["generate_slides"]
     )
-    
-    # After outline generation, check for remaining tasks
-    builder.add_conditional_edges(
-        "generate_outline",
-        continue_to_web_next_task,
-        ["start_web_research", "generate_outline", "generate_slides", END]
-    )
-    
-    # Slide generation flow
-    builder.add_conditional_edges(
-        "generate_slides", continue_to_slide_generation, ["generate_slides"]
-    )
-    builder.add_edge("generate_slides", "gather_slides")
-    
-    # After slides are gathered, check for remaining tasks
-    builder.add_conditional_edges(
-        "gather_slides",
-        continue_to_web_next_task,
-        ["start_web_research", "generate_outline", "generate_slides", END]
-    )
+    # Generate slides and finish
+    builder.add_edge("generate_slides", END)
 
     return builder.compile(name="pro-search-agent")
 
 
-# Load environment variables and create the client
-load_dotenv()
-genai_client = get_gemini_client()
-
-# Create the graph instance for import
-graph = graph_builder(genai_client)
-
 if __name__ == "__main__":
-    import time
-    from typing import Dict, Any
+    load_dotenv()
 
-    class GraphMonitor:
-        def __init__(self, graph):
-            self.graph = graph
-            self.execution_log = []
-        
-        def tracked_invoke(self, input_data: Dict[str, Any], config: Dict[str, Any]):
-            start_time = time.time()
-            thread_id = config.get("configurable", {}).get("thread_id")
-            
-            print(f"🚀 Starting graph execution for thread: {thread_id}")
-            
-            # Stream the execution to track each step
-            final_state = None
-            for event in self.graph.stream(input_data, config, stream_mode="updates"):
-                node_name = list(event.keys())[0] if event else "unknown"
-                timestamp = time.time()
-                
-                # Extract and format output for display
-                node_output = event.get(node_name, {}) if event else {}
-                output_preview = self._format_output_preview(node_output)
-                
-                log_entry = {
-                    "timestamp": timestamp,
-                    "node": node_name,
-                    "data": event,
-                    "output_preview": output_preview,
-                    "elapsed": timestamp - start_time
-                }
-                self.execution_log.append(log_entry)
-                
-                print(f"⚡ [{timestamp - start_time:.2f}s] Node '{node_name}' executed")
-                print(f"   Output: {output_preview}")
-                final_state = event
-            
-            total_time = time.time() - start_time
-            print(f"✅ Graph execution completed in {total_time:.2f}s")
-            
-            return final_state
-        
-        def _format_output_preview(self, output: Dict[str, Any]) -> str:
-            """Format output data to show first 100 characters"""
-            if not output:
-                return "No output"
-            
-            # Convert output to string representation
-            output_str = str(output)
-            
-            # Truncate to first 100 characters
-            
-            return output_str
-        
-        def print_execution_summary(self):
-            print("\n📊 Execution Summary:")
-            for entry in self.execution_log:
-                print(f"  {entry['elapsed']:.2f}s - {entry['node']}")
-                print(f"    Output: {entry['output_preview']}")
-            
-    # Usage
-    monitor = GraphMonitor(graph)
-    result = monitor.tracked_invoke(
-        {"messages": [HumanMessage(content="generate 3 slides on the topic of AI and the future of work")]},
-        {"configurable": {"thread_id": "monitored_thread"}}
-    )
-
+    genai_client = get_gemini_client()
+    graph = graph_builder(genai_client)
+    graph.invoke({"messages": [HumanMessage(content="What is the capital of France?")]})
