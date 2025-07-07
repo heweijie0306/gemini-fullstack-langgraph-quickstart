@@ -52,12 +52,20 @@ class Task(BaseModel):
         description="A task to be completed."
     )
 
-class TaskList(BaseModel):
-    tasks: List[Task] = Field(
-        description="""A list of tasks to be completed, the 3 tasks together forms a complete workflow of slide generation. But you 
-        need to select a subset of tasks to be completed based on user request. For example if user wants to generate outlines first, then 
-        you shouldnt include slide generation task in the list. Or if user just wants to chat with you, you shouldnt include any generation task in the list."""
+class FinalResponse(BaseModel):
+    response: str = Field(
+        description="The final response to the user when no more tasks need to be completed."
     )
-    text_response: str = Field(
-        description="A text response to the user indicating what you gonna do or greet the user."
+
+class Decision(BaseModel):
+    next_task: Union[
+        Literal["ContextSearch"], 
+        Literal["GenerateOutline"], 
+        Literal["GenerateSlides"],
+        FinalResponse
+    ] = Field(
+        description="The next task to be completed as a string, or a FinalResponse object if workflow is complete."
+    )
+    reasoning: str = Field(
+        description="Brief explanation of why this task was chosen based on the current state and user request."
     )

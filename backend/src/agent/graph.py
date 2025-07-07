@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from agent.tools_and_schemas import SearchQueryList, Reflection, OutlineList, SlideContent, TaskList
+from agent.tools_and_schemas import SearchQueryList, Reflection, OutlineList, SlideContent, Decision, FinalResponse
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage
 from langgraph.types import Send
@@ -21,6 +21,7 @@ from agent.state import (
     WebSearchState,
     OutlineGenerationState,
     SlideGenerationState,
+    DecisionState,
 )
 from agent.configuration import Configuration
 from agent.prompts import (
@@ -49,12 +50,12 @@ def get_llm(model: str, temperature: float = 0):
         model=model,
         api_key=os.getenv("OPENROUTER_API_KEY"),
         base_url="https://openrouter.ai/api/v1",
-        temperature=temperature,
+        temperature=temperature,    
     )
     return llm
 
 # Nodes
-def generate_task_list(state: OverallState, config: RunnableConfig) -> OverallState:
+def decision_maker(state: OverallState, config: RunnableConfig) -> OverallState:
     """LangGraph node that generates a task list based on the user's question.
 
     Uses Gemini 2.0 Flash to create a task list based on the user's question.
@@ -65,41 +66,50 @@ def generate_task_list(state: OverallState, config: RunnableConfig) -> OverallSt
     current_date = get_current_date()
     formatted_prompt = task_list_generation_instructions.format(
         current_date=current_date,
-        state=state,
+        search_result="\n---\n\n".join(state.get("web_research_result", [])),
+        outline_list=state.get("outline_list", []),
+        slides=state.get("slides", []),
+        research_topic=get_research_topic(state["messages"]),
+        executed_tasks=state.get("executed_tasks", []),
     )
     llm = get_llm(reasoning_model, 1.0)
-    result = llm.with_structured_output(TaskList).invoke(formatted_prompt)
-    return {"task_list": result.tasks, "text_response": result.text_response}
-
-def continue_to_web_next_task(state: OverallState):
-    """Router that ensures proper task execution sequence: ContextSearch → GenerateOutline → GenerateSlides"""
-    remaining_tasks = [task for task in state.get("task_list", [])]
+    result = llm.with_structured_output(Decision).invoke(formatted_prompt)
     
-    # Enforce sequence: Search must come first if present
-    if any(task.task == "ContextSearch" for task in remaining_tasks):
-        # Remove ContextSearch task from the list
-        remaining_tasks = [task for task in remaining_tasks if task.task != "ContextSearch"]
-        state["task_list"] = remaining_tasks
-        return "start_web_research"
-    
-    # Then GenerateOutline (only after ContextSearch is done or not present)
-    elif any(task.task == "GenerateOutline" for task in remaining_tasks):
-        # Remove GenerateOutline task from the list
-        remaining_tasks = [task for task in remaining_tasks if task.task != "GenerateOutline"]
-        state["task_list"] = remaining_tasks
-        return "generate_outline"
-    
-    # Finally GenerateSlides (only after previous tasks are done or not present)
-    elif any(task.task == "GenerateSlides" for task in remaining_tasks):
-        # Remove GenerateSlides task from the list
-        remaining_tasks = [task for task in remaining_tasks if task.task != "GenerateSlides"]
-        state["task_list"] = remaining_tasks
-        return "generate_slides"
-    
-    # No more tasks - end the workflow
+    # Always set next_task, and optionally set text_response for FinalResponse
+    if isinstance(result.next_task, FinalResponse):
+        return {
+            "next_task": result.next_task,  # Set the FinalResponse object
+            "text_response": result.next_task.response,  # Also set the response text
+            "reasoning": result.reasoning
+        }
     else:
-        return END
+        return {
+            "next_task": result.next_task,
+            "reasoning": result.reasoning
+        }
 
+def continue_to_next_task(state: OverallState):
+    if state["next_task"] == "ContextSearch":
+        return "generate_query"
+    elif state["next_task"] == "GenerateOutline":
+        return "generate_outline"
+    elif state["next_task"] == "GenerateSlides":
+        if state.get("outline_list"):
+            # Return Send objects for fan-out
+            return [
+                Send("generate_slide_content", {
+                    "outline_topic": outline, 
+                    "slide_id": int(idx),
+                    "messages": state["messages"],
+                    "web_research_result": state["web_research_result"]
+                })
+                for idx, outline in enumerate(state["outline_list"])
+            ]
+        else:
+            return "generate_outline"
+    elif isinstance(state["next_task"], FinalResponse):
+        return END
+    
 def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
     """LangGraph node that generates a search queries based on the User's question.
 
@@ -226,8 +236,8 @@ def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
         "research_loop_count": state["research_loop_count"],
         "number_of_ran_queries": len(state["search_query"]),
         "summary": result.summary,
+        "executed_tasks": state["executed_tasks"],
     }
-
 
 def evaluate_research(
     state: ReflectionState,
@@ -252,7 +262,7 @@ def evaluate_research(
         else configurable.max_research_loops
     )
     if state["is_sufficient"] or state["research_loop_count"] >= max_research_loops:
-        return "generate_outline"
+        return "decision_maker"
     else:
         return [
             Send(
@@ -287,6 +297,7 @@ def generate_outline(state: OverallState, config: RunnableConfig) -> OutlineGene
     formatted_prompt = outline_generation_instructions.format(
         current_date=current_date,
         research_topic=get_research_topic(state["messages"]),
+        outline_list=state.get("outline_list", []),
         summaries="\n---\n\n".join(state["web_research_result"]),
     )
 
@@ -296,30 +307,36 @@ def generate_outline(state: OverallState, config: RunnableConfig) -> OutlineGene
 
     return {"outline_list": result.outlines}
 
-def human_eval_outline(state: OverallState, config: RunnableConfig) -> OverallState:
+def evaluate_outline(state: OverallState, config: RunnableConfig) -> OverallState:
     """LangGraph node that evaluates the outline and asks for human feedback.
 
     Uses Gemini 2.0 Flash to evaluate the outline and asks for human feedback.
     """
-    return {"outline_evaluation_result": "outline_evaluation_result"}
+    if state["outline_list"]:
+        return "decision_maker"
+    else:
+        return END
 
-def continue_to_slide_generation(state: OverallState):
-    """LangGraph node that sends outlines to slide generation nodes.
+# def continue_to_slide_generation(state: OverallState):
+#     """LangGraph node that sends outlines to slide generation nodes.
 
-    This is used to spawn n number of slide generation nodes, one for each outline.
-    """
-    return [
-        Send("generate_slides", {
-            "outline_topic": outline, 
-            "slide_id": int(idx),
-            "messages": state["messages"],
-            "web_research_result": state["web_research_result"]
-        })
-        for idx, outline in enumerate(state["outline_list"])
-    ]
+#     This is used to spawn n number of slide generation nodes, one for each outline.
+#     """
+#     if state["outline_list"]:
+#         return [
+#             Send("generate_slide_content", {
+#                 "outline_topic": outline, 
+#                 "slide_id": int(idx),
+#                 "messages": state["messages"],
+#                 "web_research_result": state["web_research_result"]
+#             })
+#             for idx, outline in enumerate(state["outline_list"])
+#         ]
+#     else:
+#         return END
 
 
-def generate_slides(state: OverallState, config: RunnableConfig) -> OverallState:
+def generate_slide_content(state: OverallState, config: RunnableConfig) -> OverallState:
     """LangGraph node that generates slide content based on outline and research summaries.
 
     Creates detailed slide content for a specific outline topic using the research findings
@@ -355,99 +372,74 @@ def generate_slides(state: OverallState, config: RunnableConfig) -> OverallState
 
     return {"slides": [slide_data]}
 
+def reset_tasks(state: OverallState) -> OverallState:
+    return {"executed_tasks": []}
 
-def gather_slides(state: OverallState, config: RunnableConfig) -> OverallState:
-    """LangGraph node that gathers and sorts all generated slides by slide ID.
+# def evaluate_slides(state: OverallState):
+#     """LangGraph node that gathers and sorts all generated slides by slide ID.
 
-    Takes all the accumulated slides from parallel slide generation and sorts them
-    by slide_id to ensure proper ordering in the final output.
+#     Takes all the accumulated slides from parallel slide generation and sorts them
+#     by slide_id to ensure proper ordering in the final output.
 
-    Args:
-        state: Current graph state containing all generated slides
-        config: Configuration for the runnable (not used in this function)
+#     Args:
+#         state: Current graph state containing all generated slides
+#         config: Configuration for the runnable (not used in this function)
 
-    Returns:
-        Dictionary with state update, including sorted_slides with ordered slide content
-    """
-    # Sort slides by slide_id to ensure proper ordering
-    sorted_slides = sorted(state.get("slides", []), key=lambda x: x["slide_id"])
+#     Returns:
+#         Dictionary with state update, including sorted_slides with ordered slide content
+#     """
+#     # Sort slides by slide_id for proper ordering
+#     if state["slides"]:
+#         return END
+#     else:
+#         return "decision_maker"
     
-    # Create output with just content ordered by slide_id
-    slide_contents = []
-    for slide in sorted_slides:
-        slide_contents.append({
-            "content": slide["content"],
-        })
-
-    
-    return {
-        "sorted_slides": slide_contents,
-        "slide_count": len(slide_contents)
-    }
-
-def check_remaining_tasks(state: OverallState) -> OverallState:
-    """Simple pass-through node to check remaining tasks after web research"""
-    return state
 
 def graph_builder(genai_client: Client):
     # Create our Agent Graph
     builder = StateGraph(OverallState, config_schema=Configuration)
 
     # Define the nodes
-    builder.add_node("generate_task_list", generate_task_list)
+    builder.add_node("decision_maker", decision_maker)
     builder.add_node("generate_query", generate_query)
     builder.add_node("web_research", web_research)
     builder.add_node("reflection", reflection)
     builder.add_node("generate_outline", generate_outline)
-    builder.add_node("generate_slides", generate_slides)
-    builder.add_node("gather_slides", gather_slides)
+    builder.add_node("generate_slide_content", generate_slide_content)
+    builder.add_node("reset_tasks", reset_tasks)
+    # builder.add_node("evaluate_slides", evaluate_slides)
 
     # Entry point
-    builder.add_edge(START, "generate_task_list")
+    builder.add_edge(START, "decision_maker")
     
-    # Route to next task based on task list
+    # Route to next task based on decision maker output
     builder.add_conditional_edges(
-        "generate_task_list", 
-        continue_to_web_next_task, 
-        ["start_web_research", "generate_outline", "generate_slides", END]
+        "decision_maker", 
+        continue_to_next_task, 
+        ["generate_query", "generate_outline", "generate_slide_content", END]
     )
     
     # Web research flow (when ContextSearch task is selected)
-    builder.add_edge("start_web_research", "generate_query")
     builder.add_conditional_edges(
         "generate_query", continue_to_web_research, ["web_research"]
     )
     builder.add_edge("web_research", "reflection")
     builder.add_conditional_edges(
-        "reflection", evaluate_research, ["web_research", "check_remaining_tasks"]
+        "reflection", evaluate_research, ["web_research", "decision_maker"]
     )
     
-    # After web research completes, check for remaining tasks
-    builder.add_conditional_edges(
-        "check_remaining_tasks",
-        continue_to_web_next_task,
-        ["start_web_research", "generate_outline", "generate_slides", END]
-    )
-    
-    # After outline generation, check for remaining tasks
-    builder.add_conditional_edges(
-        "generate_outline",
-        continue_to_web_next_task,
-        ["start_web_research", "generate_outline", "generate_slides", END]
-    )
-    
-    # Slide generation flow
-    builder.add_conditional_edges(
-        "generate_slides", continue_to_slide_generation, ["generate_slides"]
-    )
-    builder.add_edge("generate_slides", "gather_slides")
-    
-    # After slides are gathered, check for remaining tasks
-    builder.add_conditional_edges(
-        "gather_slides",
-        continue_to_web_next_task,
-        ["start_web_research", "generate_outline", "generate_slides", END]
-    )
+    # Outline generation flow (when GenerateOutline task is selected)
+    builder.add_edge("generate_outline", "decision_maker")
+    builder.add_edge("generate_slide_content", "reset_tasks")
+    builder.add_edge("reset_tasks", END)
+    # Slide generation flow (when GenerateSlides task is selected)
+    # builder.add_conditional_edges(
+    #     "decision_maker", 
+    #     continue_to_slide_generation,
+    #     ["generate_slide_content", END]
+    # )
+    # builder.add_edge("generate_slide_content", "evaluate_slides")
+    # builder.add_edge("evaluate_slides", END)
 
     return builder.compile(name="pro-search-agent")
 
