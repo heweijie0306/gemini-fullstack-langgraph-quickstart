@@ -105,7 +105,7 @@ Instructions:
 - Focus on the most important findings and insights from the research.
 - The number of outlines should match the number of slides required by the user prompt, if the user
 didn't specify the number of slides, you should generate 8-12 outlines based on the complexity of user topic.
-
+- For add/remove/modify the outline, you should always generate the complete outline, don't do it incrementally.
 
 User Context:
 - {research_topic}
@@ -294,7 +294,11 @@ Specific Outline Topic:
 {outline_topic}
 
 Research Summaries:
-{summaries}"""
+{summaries}
+
+Current Slides:
+{slides}"""
+
 task_list_generation_instructions = """
 You are PageOn's intelligent task manager and decision engine. Your role is to analyze the user's request and current workflow state, then determine the most appropriate next action to take.
 
@@ -362,10 +366,15 @@ You are PageOn's intelligent task manager and decision engine. Your role is to a
 **Decision**: FinalResponse with response: "Hello! I'm doing well and ready to help you with research and slide generation. What would you like to work on today?"
 **Reasoning**: "Simple greeting, no task needed."
 
+## Requirements:
+- If the user's request is just to do research, and the research or context is sufficient, you should return FinalResponse with a response.
+- If the user's request is just to generate outlines, and the outlines is not provided, you should return FinalResponse with a response.
+
+i.e. If the user is asking for doing a specific intermediate tasks, dont assume the user wants to do all the tasks. For countexamples, user only wants to do research but you generate outlines, only want outlines but you generate slides, only want slides but you generate research.
 Now analyze the current situation and decide the next step:
 
 ## Current Context:
 
 - User's original request: {research_topic}
-- Current state: {state}
+- Current state: outline_list: {outline_list}, slides: {slides}, search_result: {search_result}
 """

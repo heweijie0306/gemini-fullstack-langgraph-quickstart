@@ -69,8 +69,8 @@ def decision_maker(state: OverallState, config: RunnableConfig) -> OverallState:
         search_result="\n---\n\n".join(state.get("web_research_result", [])),
         outline_list=state.get("outline_list", []),
         slides=state.get("slides", []),
-        research_topic=get_research_topic(state["messages"]),
         executed_tasks=state.get("executed_tasks", []),
+        research_topic=get_research_topic(state["messages"]),
     )
     llm = get_llm(reasoning_model, 1.0)
     result = llm.with_structured_output(Decision).invoke(formatted_prompt)
@@ -79,7 +79,7 @@ def decision_maker(state: OverallState, config: RunnableConfig) -> OverallState:
     if isinstance(result.next_task, FinalResponse):
         return {
             "next_task": result.next_task,  # Set the FinalResponse object
-            "text_response": result.next_task.response,  # Also set the response text
+            "text_response": [result.next_task.response],  # Also set the response text
             "reasoning": result.reasoning
         }
     else:
@@ -101,12 +101,17 @@ def continue_to_next_task(state: OverallState):
                     "outline_topic": outline, 
                     "slide_id": int(idx),
                     "messages": state["messages"],
-                    "web_research_result": state["web_research_result"]
+                    "web_research_result": state["web_research_result"],
+                    "slides": state["slides"]
                 })
                 for idx, outline in enumerate(state["outline_list"])
             ]
         else:
-            return "generate_outline"
+            return Send("generate_slide_content", {
+                "outline_topic": state["messages"],
+                "web_research_result": state["web_research_result"],
+                "slides": state["slides"]
+            })
     elif isinstance(state["next_task"], FinalResponse):
         return END
     
@@ -236,7 +241,7 @@ def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
         "research_loop_count": state["research_loop_count"],
         "number_of_ran_queries": len(state["search_query"]),
         "summary": result.summary,
-        "executed_tasks": state["executed_tasks"],
+        "executed_tasks": state.get("executed_tasks", []) + ["ContextSearch"]
     }
 
 def evaluate_research(
@@ -305,7 +310,8 @@ def generate_outline(state: OverallState, config: RunnableConfig) -> OutlineGene
     llm = get_llm(reasoning_model, 0.3)
     result = llm.with_structured_output(OutlineList).invoke(formatted_prompt)
 
-    return {"outline_list": result.outlines}
+    return {"outline_list": result.outlines,       
+            "executed_tasks": state.get("executed_tasks", []) + ["GenerateOutline"]}
 
 def evaluate_outline(state: OverallState, config: RunnableConfig) -> OverallState:
     """LangGraph node that evaluates the outline and asks for human feedback.
@@ -358,6 +364,7 @@ def generate_slide_content(state: OverallState, config: RunnableConfig) -> Overa
         current_date=current_date,
         outline_topic=state["outline_topic"],
         summaries="\n---\n\n".join(state["web_research_result"]),
+        slides="\n---\n\n".join(state["slides"]),
     )
 
     # init Reasoning Model
@@ -367,32 +374,16 @@ def generate_slide_content(state: OverallState, config: RunnableConfig) -> Overa
     slide_data = {
         "slide_id": state["slide_id"],     
         "content": result.content,
-        "outline_topic": state["outline_topic"]
+        "outline_topic": state["outline_topic"],
+        "executed_tasks": state.get("executed_tasks", []) + ["GenerateSlides"]
     }
 
     return {"slides": [slide_data]}
 
 def reset_tasks(state: OverallState) -> OverallState:
-    return {"executed_tasks": []}
+    return {"executed_tasks": state.get("executed_tasks", [])}
 
-# def evaluate_slides(state: OverallState):
-#     """LangGraph node that gathers and sorts all generated slides by slide ID.
 
-#     Takes all the accumulated slides from parallel slide generation and sorts them
-#     by slide_id to ensure proper ordering in the final output.
-
-#     Args:
-#         state: Current graph state containing all generated slides
-#         config: Configuration for the runnable (not used in this function)
-
-#     Returns:
-#         Dictionary with state update, including sorted_slides with ordered slide content
-#     """
-#     # Sort slides by slide_id for proper ordering
-#     if state["slides"]:
-#         return END
-#     else:
-#         return "decision_maker"
     
 
 def graph_builder(genai_client: Client):
@@ -408,7 +399,7 @@ def graph_builder(genai_client: Client):
     builder.add_node("generate_slide_content", generate_slide_content)
     builder.add_node("reset_tasks", reset_tasks)
     # builder.add_node("evaluate_slides", evaluate_slides)
-
+    
     # Entry point
     builder.add_edge(START, "decision_maker")
     
@@ -430,6 +421,7 @@ def graph_builder(genai_client: Client):
     
     # Outline generation flow (when GenerateOutline task is selected)
     builder.add_edge("generate_outline", "decision_maker")
+    builder.add_edge("generate_slide_content", "decision_maker")
     builder.add_edge("generate_slide_content", "reset_tasks")
     builder.add_edge("reset_tasks", END)
     # Slide generation flow (when GenerateSlides task is selected)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TypedDict
+from typing import TypedDict, Union, Literal, List
 
 from langgraph.graph import add_messages
 from typing_extensions import Annotated
@@ -15,19 +15,24 @@ from typing_extensions import Annotated
 class OverallState(TypedDict):
     messages: Annotated[list, add_messages]
     task_list: Annotated[list, operator.add]
-    text_response: str
+    text_response: Annotated[list, operator.add]
     search_query: Annotated[list, operator.add]
     web_research_result: Annotated[list, operator.add]
     sources_gathered: Annotated[list, operator.add]
-    outline_list: Annotated[list, operator.add]
+    outline_list: list
     slides: Annotated[list, operator.add]
-    sorted_slides: Annotated[list, operator.add]
     slide_count: int
     initial_search_query_count: int
     max_research_loops: int
     research_loop_count: int
     reasoning_model: str
     summary: str
+    next_task: Union[str, dict, None] 
+    reasoning: str
+
+class DecisionState(TypedDict):
+    previous_task: Union[Literal["ContextSearch"], Literal["GenerateOutline"], Literal["GenerateSlides"]]
+    reasoning: str
 
 class ReflectionState(TypedDict):
     is_sufficient: bool

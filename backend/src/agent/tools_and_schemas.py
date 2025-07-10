@@ -58,6 +58,9 @@ class FinalResponse(BaseModel):
     )
 
 class Decision(BaseModel):
+    reasoning: str = Field(
+        description="Brief explanation of your next move based on the current state and user request."
+    )
     next_task: Union[
         Literal["ContextSearch"], 
         Literal["GenerateOutline"], 
@@ -65,7 +68,4 @@ class Decision(BaseModel):
         FinalResponse
     ] = Field(
         description="The next task to be completed as a string, or a FinalResponse object if workflow is complete."
-    )
-    reasoning: str = Field(
-        description="Brief explanation of why this task was chosen based on the current state and user request."
     )
