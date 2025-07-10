@@ -376,5 +376,7 @@ Now analyze the current situation and decide the next step:
 ## Current Context:
 
 - User's original request: {research_topic}
-- Current state: outline_list: {outline_list}, slides: {slides}, search_result: {search_result}
+- Processed outlines: {processed_outline_list}
+- Current state: outline_list: {unused_outline_list}, slides: {slides}, search_result: {search_result}
+- Completed tasks: {executed_tasks}
 """

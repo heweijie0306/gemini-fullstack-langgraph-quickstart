@@ -63,9 +63,9 @@ class Decision(BaseModel):
     )
     next_task: Union[
         Literal["ContextSearch"], 
-        Literal["GenerateOutline"], 
+        Literal["GenerateOutline"]                   , 
         Literal["GenerateSlides"],
         FinalResponse
-    ] = Field(
+    ] = Field(                      
         description="The next task to be completed as a string, or a FinalResponse object if workflow is complete."
     )

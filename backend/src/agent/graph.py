@@ -21,7 +21,6 @@ from agent.state import (
     WebSearchState,
     OutlineGenerationState,
     SlideGenerationState,
-    DecisionState,
 )
 from agent.configuration import Configuration
 from agent.prompts import (
@@ -67,7 +66,8 @@ def decision_maker(state: OverallState, config: RunnableConfig) -> OverallState:
     formatted_prompt = task_list_generation_instructions.format(
         current_date=current_date,
         search_result="\n---\n\n".join(state.get("web_research_result", [])),
-        outline_list=state.get("outline_list", []),
+        processed_outline_list=state.get("processed_outline_list", []),
+        unused_outline_list=state.get("unused_outline_list", []),
         slides=state.get("slides", []),
         executed_tasks=state.get("executed_tasks", []),
         research_topic=get_research_topic(state["messages"]),
@@ -94,7 +94,7 @@ def continue_to_next_task(state: OverallState):
     elif state["next_task"] == "GenerateOutline":
         return "generate_outline"
     elif state["next_task"] == "GenerateSlides":
-        if state.get("outline_list"):
+        if state.get("unused_outline_list"):
             # Return Send objects for fan-out
             return [
                 Send("generate_slide_content", {
@@ -104,7 +104,7 @@ def continue_to_next_task(state: OverallState):
                     "web_research_result": state["web_research_result"],
                     "slides": state["slides"]
                 })
-                for idx, outline in enumerate(state["outline_list"])
+                for idx, outline in enumerate(state["unused_outline_list"])
             ]
         else:
             return Send("generate_slide_content", {
@@ -310,7 +310,7 @@ def generate_outline(state: OverallState, config: RunnableConfig) -> OutlineGene
     llm = get_llm(reasoning_model, 0.3)
     result = llm.with_structured_output(OutlineList).invoke(formatted_prompt)
 
-    return {"outline_list": result.outlines,       
+    return {"unused_outline_list": result.outlines,       
             "executed_tasks": state.get("executed_tasks", []) + ["GenerateOutline"]}
 
 def evaluate_outline(state: OverallState, config: RunnableConfig) -> OverallState:
@@ -374,8 +374,9 @@ def generate_slide_content(state: OverallState, config: RunnableConfig) -> Overa
     slide_data = {
         "slide_id": state["slide_id"],     
         "content": result.content,
-        "outline_topic": state["outline_topic"],
-        "executed_tasks": state.get("executed_tasks", []) + ["GenerateSlides"]
+        "executed_tasks": state.get("executed_tasks", []) + ["GenerateSlides"],
+        "processed_outline_list": state["outline_topic"],
+        "unused_outline_list": state["outline_topic"]
     }
 
     return {"slides": [slide_data]}

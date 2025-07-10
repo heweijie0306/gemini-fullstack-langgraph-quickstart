@@ -12,6 +12,24 @@ from dataclasses import dataclass, field
 from typing_extensions import Annotated
 
 
+
+
+def outline_reducer(current: list, update) -> list:
+    """Simple reducer: if update is a dict, remove it from the list"""
+    if current is None:
+        current = []
+    
+    if isinstance(update, dict):
+        # Remove the dict from current list
+        return [item for item in current if item != update]
+    elif isinstance(update, list):
+        # Normal list operations
+        return current + update
+    else:
+        # Single item append
+        return current + [update]
+
+
 class OverallState(TypedDict):
     messages: Annotated[list, add_messages]
     task_list: Annotated[list, operator.add]
@@ -29,10 +47,9 @@ class OverallState(TypedDict):
     summary: str
     next_task: Union[str, dict, None] 
     reasoning: str
-
-class DecisionState(TypedDict):
-    previous_task: Union[Literal["ContextSearch"], Literal["GenerateOutline"], Literal["GenerateSlides"]]
-    reasoning: str
+    executed_tasks: list
+    processed_outline_list: Annotated[list, operator.add]
+    unused_outline_list: Annotated[list, outline_reducer]
 
 class ReflectionState(TypedDict):
     is_sufficient: bool
