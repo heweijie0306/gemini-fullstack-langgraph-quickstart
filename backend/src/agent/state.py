@@ -11,14 +11,6 @@ import operator
 from dataclasses import dataclass, field
 from typing_extensions import Annotated
 
-def reduce_with_overwrite(left, right):
-    if left is None:
-        left = []
-    if not right:
-        # Overwrite with empty list
-        return []
-    return left + right
-
 
 class OverallState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -40,7 +32,7 @@ class OverallState(TypedDict):
     executed_tasks: list
     processed_outline_list: Annotated[list, operator.add]
     unused_outline_list: list
-    task_message: Annotated[list, reduce_with_overwrite]
+    task_message: Annotated[list, operator.add]
 
 class ReflectionState(TypedDict):
     is_sufficient: bool
@@ -74,6 +66,22 @@ class SlideGenerationState(TypedDict):
     messages: Annotated[list, add_messages]
     web_research_result: Annotated[list, operator.add]
 
+class AfterGenState(TypedDict):
+    messages: Annotated[list, add_messages]
+    prompt: str = ''
+    topic: str = ''
+    projectId: int = None
+    pages: list = []
+    pageId: str = ''
+    pageIndex: int = -1
+    history: list = []
+    block: dict = {}
+    blockId: str = ''
+    documentIds: list = []
+    pagesHTML: list = []
+    blockHTML: str = ''
+    files: list = []
+    images: list = []
 
 @dataclass(kw_only=True)
 class SearchStateOutput:

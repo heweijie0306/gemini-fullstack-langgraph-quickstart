@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from agent.tools_and_schemas import SearchQueryList, Reflection, OutlineList, SlideContent, Decision, FinalResponse
+from agent.tools_and_schemas import SearchQueryList, Reflection, OutlineList, SlideContent, Decision, FinalResponse, Coordinator, EditContent
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage
 from langgraph.types import Send
@@ -21,6 +21,7 @@ from agent.state import (
     WebSearchState,
     OutlineGenerationState,
     SlideGenerationState,
+    AfterGenState,
 )
 from agent.configuration import Configuration
 from agent.prompts import (
@@ -32,6 +33,9 @@ from agent.prompts import (
     outline_generation_instructions,
     slide_generation_instructions,
     task_list_generation_instructions,
+    coordinator_instructions,
+    add_new_slide_instructions,
+    editor_instructions,
 )
 from langchain_google_genai import ChatGoogleGenerativeAI
 from agent.utils import (
@@ -94,7 +98,7 @@ def continue_to_next_task(state: OverallState):
     elif state["next_task"] == "GenerateOutline":
         return "generate_outline"
     elif state["next_task"] == "GenerateSlides":
-        if state.get("unused_outline_list"):
+        if state.get("outline_list"):
             # Return Send objects for fan-out - each gets its own topic
             return [
                 Send("generate_slide_content", {
@@ -105,14 +109,11 @@ def continue_to_next_task(state: OverallState):
                     "reasoning_model": state.get("reasoning_model"),
                     "executed_tasks": state.get("executed_tasks", [])
                 })
-                for idx, outline in enumerate(state["unused_outline_list"])
+                for idx, outline in enumerate(state["outline_list"])
                 if outline not in state["processed_outline_list"]
             ]
         else:
-            return Send("generate_slide_content", {
-            "outline_topic": get_research_topic(state["messages"]),
-            "web_research_result": state["web_research_result"],
-        })
+            return "generate_outline"
     elif isinstance(state["next_task"], FinalResponse):
         return "reset_task_messages"
     
@@ -323,15 +324,6 @@ def generate_outline(state: OverallState, config: RunnableConfig) -> OutlineGene
             "task_message": [result.response],
             "executed_tasks": state.get("executed_tasks", []) + ["GenerateOutline"]}
 
-def evaluate_outline(state: OverallState, config: RunnableConfig) -> OverallState:
-    """LangGraph node that evaluates the outline and asks for human feedback.
-
-    Uses Gemini 2.0 Flash to evaluate the outline and asks for human feedback.
-    """
-    if state["outline_list"]:
-        return "decision_maker"
-    else:
-        return END
 
 # def continue_to_slide_generation(state: OverallState):
 #     """LangGraph node that sends outlines to slide generation nodes.
@@ -350,7 +342,6 @@ def evaluate_outline(state: OverallState, config: RunnableConfig) -> OverallStat
 #         ]
 #     else:
 #         return END
-
 
 def generate_slide_content(state: OverallState, config: RunnableConfig) -> OverallState:
     """LangGraph node that generates slide content based on outline and research summaries.
@@ -392,11 +383,10 @@ def generate_slide_content(state: OverallState, config: RunnableConfig) -> Overa
     }
 
 
-def cleanup_outline_list(state: OverallState) -> OverallState:
+def update_outline_list(state: OverallState) -> OverallState:
     """Remove processed topics from unused_outline_list"""
     processed = state.get("processed_outline_list", [])
     current_unused = state.get("unused_outline_list", [])
-    
     # Remove all processed topics
     updated_unused = [topic for topic in current_unused if topic not in processed]
     
@@ -409,7 +399,8 @@ def reset_task_messages(state: OverallState) -> OverallState:
     return {
         "task_message": []
     }
-    
+
+
 
 def graph_builder(genai_client: Client):
     # Create our Agent Graph
@@ -422,7 +413,7 @@ def graph_builder(genai_client: Client):
     # builder.add_node("reflection", reflection)
     builder.add_node("generate_outline", generate_outline)
     builder.add_node("generate_slide_content", generate_slide_content)
-    builder.add_node("cleanup_outline_list", cleanup_outline_list)
+    builder.add_node("update_outline_list", update_outline_list)
     builder.add_node("reset_task_messages", reset_task_messages)
     # builder.add_node("evaluate_slides", evaluate_slides)
     
@@ -447,8 +438,8 @@ def graph_builder(genai_client: Client):
     
     # Outline generation flow (when GenerateOutline task is selected)
     builder.add_edge("generate_outline", "decision_maker")
-    builder.add_edge("generate_slide_content", "cleanup_outline_list")
-    builder.add_edge("cleanup_outline_list", "decision_maker")
+    builder.add_edge("generate_slide_content", "update_outline_list")
+    builder.add_edge("update_outline_list", "decision_maker")
     builder.add_edge("reset_task_messages", END)
     # Slide generation flow (when GenerateSlides task is selected)
     # builder.add_conditional_edges(
@@ -459,7 +450,7 @@ def graph_builder(genai_client: Client):
     # builder.add_edge("generate_slide_content", "evaluate_slides")
     # builder.add_edge("evaluate_slides", END)
 
-    return builder.compile(name="pro-search-agent")
+    return builder.compile(name="generator-graph")
 
 
 # Load environment variables and create the client
@@ -467,73 +458,5 @@ load_dotenv()
 genai_client = get_gemini_client()
 
 # Create the graph instance for import
-graph = graph_builder(genai_client)
-
-if __name__ == "__main__":
-    import time
-    from typing import Dict, Any
-
-    class GraphMonitor:
-        def __init__(self, graph):
-            self.graph = graph
-            self.execution_log = []
-        
-        def tracked_invoke(self, input_data: Dict[str, Any], config: Dict[str, Any]):
-            start_time = time.time()
-            thread_id = config.get("configurable", {}).get("thread_id")
-            
-            print(f"🚀 Starting graph execution for thread: {thread_id}")
-            
-            # Stream the execution to track each step
-            final_state = None
-            for event in self.graph.stream(input_data, config, stream_mode="updates"):
-                node_name = list(event.keys())[0] if event else "unknown"
-                timestamp = time.time()
-                
-                # Extract and format output for display
-                node_output = event.get(node_name, {}) if event else {}
-                output_preview = self._format_output_preview(node_output)
-                
-                log_entry = {
-                    "timestamp": timestamp,
-                    "node": node_name,
-                    "data": event,
-                    "output_preview": output_preview,
-                    "elapsed": timestamp - start_time
-                }
-                self.execution_log.append(log_entry)
-                
-                print(f"⚡ [{timestamp - start_time:.2f}s] Node '{node_name}' executed")
-                print(f"   Output: {output_preview}")
-                final_state = event
-            
-            total_time = time.time() - start_time
-            print(f"✅ Graph execution completed in {total_time:.2f}s")
-            
-            return final_state
-        
-        def _format_output_preview(self, output: Dict[str, Any]) -> str:
-            """Format output data to show first 100 characters"""
-            if not output:
-                return "No output"
-            
-            # Convert output to string representation
-            output_str = str(output)
-            
-            # Truncate to first 100 characters
-            
-            return output_str
-        
-        def print_execution_summary(self):
-            print("\n📊 Execution Summary:")
-            for entry in self.execution_log:
-                print(f"  {entry['elapsed']:.2f}s - {entry['node']}")
-                print(f"    Output: {entry['output_preview']}")
-            
-    # Usage
-    monitor = GraphMonitor(graph)
-    result = monitor.tracked_invoke(
-        {"messages": [HumanMessage(content="generate 3 slides on the topic of AI and the future of work")]},
-        {"configurable": {"thread_id": "monitored_thread"}}
-    )
+generator_graph = graph_builder(genai_client)
 

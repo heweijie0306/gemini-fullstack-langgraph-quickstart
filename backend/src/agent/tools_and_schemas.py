@@ -36,15 +36,24 @@ class OutlineList(BaseModel):
     outlines: List[Outline] = Field(
         description="A list of slide outlines, each representing a specific topic or section for presentation slides."
     )
+    response: str = Field(
+        description="A brief short response to indicate the completion of the outline generation."
+    )
 
-
+class EditContent(BaseModel):
+    content: str = Field(
+        description="The content of the slide"
+    )
+    response: str = Field(
+        description="A brief short response to indicate the completion of the slide generation."
+    )
 
 class SlideContent(BaseModel):
-    title: str = Field(
-        description="The title of the slide."
-    )
     content: str = Field(
-        description="The detailed content of the slide, formatted in markdown."
+        description="The content of the slide"
+    )
+    response: str = Field(
+        description="A brief short response to indicate the completion of the slide generation."
     )
 
 class Task(BaseModel):
@@ -62,10 +71,22 @@ class Decision(BaseModel):
         description="Brief explanation of your next move based on the current state and user request."
     )
     next_task: Union[
-        Literal["ContextSearch"], 
-        Literal["GenerateOutline"]                   , 
+        # Literal["ContextSearch"], 
+        Literal["GenerateOutline"], 
         Literal["GenerateSlides"],
         FinalResponse
-    ] = Field(                      
+    ] = Field(
+        description="The next task to be completed as a string, or a FinalResponse object if workflow is complete."
+    )
+    
+class Coordinator(BaseModel):
+    reasoning: str = Field(
+        description="Brief explanation of your next move based on the current state and user request."
+    )
+    next_task: Union[
+        Literal["add_new_slide"],
+        Literal["editor"],
+        FinalResponse
+    ] = Field(
         description="The next task to be completed as a string, or a FinalResponse object if workflow is complete."
     )
