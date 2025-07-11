@@ -15,8 +15,6 @@ import {
   Pen,
   ChevronDown,
   ChevronUp,
-  List,
-  Presentation,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -48,10 +46,6 @@ export function ActivityTimeline({
       return <Brain className="h-4 w-4 text-neutral-400" />;
     } else if (title.toLowerCase().includes("research")) {
       return <Search className="h-4 w-4 text-neutral-400" />;
-    } else if (title.toLowerCase().includes("outline")) {
-      return <List className="h-4 w-4 text-neutral-400" />;
-    } else if (title.toLowerCase().includes("slide")) {
-      return <Presentation className="h-4 w-4 text-neutral-400" />;
     } else if (title.toLowerCase().includes("finalizing")) {
       return <Pen className="h-4 w-4 text-neutral-400" />;
     }

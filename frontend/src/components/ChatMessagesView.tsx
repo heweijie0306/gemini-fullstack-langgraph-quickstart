@@ -12,7 +12,6 @@ import {
   ActivityTimeline,
   ProcessedEvent,
 } from "@/components/ActivityTimeline"; // Assuming ActivityTimeline is in the same dir or adjust path
-import { SlideDisplay } from "@/components/SlideDisplay";
 
 // Markdown component props type from former ReportView
 type MdComponentProps = {
@@ -187,9 +186,6 @@ const AiMessageBubble: React.FC<AiMessageBubbleProps> = ({
     isLastMessage && isOverallLoading ? liveActivity : historicalActivity;
   const isLiveActivityForThisBubble = isLastMessage && isOverallLoading;
 
-  // Check if this message contains slides
-  const hasSlides = (message as any).additional_kwargs?.slides && Array.isArray((message as any).additional_kwargs.slides);
-
   return (
     <div className={`relative break-words flex flex-col`}>
       {activityForThisBubble && activityForThisBubble.length > 0 && (
@@ -200,29 +196,16 @@ const AiMessageBubble: React.FC<AiMessageBubbleProps> = ({
           />
         </div>
       )}
-      
-      {/* Regular message content */}
-      <div className="mb-4">
-        <ReactMarkdown components={mdComponents}>
-          {typeof message.content === "string"
-            ? message.content
-            : JSON.stringify(message.content)}
-        </ReactMarkdown>
-      </div>
-
-      {/* Slide display if slides are present */}
-      {hasSlides && (
-        <div className="mb-4">
-                     <SlideDisplay 
-             slides={(message as any).additional_kwargs.slides} 
-             mdComponents={mdComponents}
-           />
-        </div>
-      )}
-
+      <ReactMarkdown components={mdComponents}>
+        {typeof message.content === "string"
+          ? message.content
+          : JSON.stringify(message.content)}
+      </ReactMarkdown>
       <Button
         variant="default"
-        className="cursor-pointer bg-neutral-700 border-neutral-600 text-neutral-300 self-end"
+        className={`cursor-pointer bg-neutral-700 border-neutral-600 text-neutral-300 self-end ${
+          message.content.length > 0 ? "visible" : "hidden"
+        }`}
         onClick={() =>
           handleCopy(
             typeof message.content === "string"
@@ -269,10 +252,9 @@ export function ChatMessagesView({
       console.error("Failed to copy text: ", err);
     }
   };
-
   return (
     <div className="flex flex-col h-full">
-      <ScrollArea className="flex-grow" ref={scrollAreaRef}>
+      <ScrollArea className="flex-1 overflow-y-auto" ref={scrollAreaRef}>
         <div className="p-4 md:p-6 space-y-2 max-w-4xl mx-auto pt-16">
           {messages.map((message, index) => {
             const isLast = index === messages.length - 1;

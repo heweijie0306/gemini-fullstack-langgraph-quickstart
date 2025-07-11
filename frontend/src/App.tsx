@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { ProcessedEvent } from "@/components/ActivityTimeline";
 import { WelcomeScreen } from "@/components/WelcomeScreen";
 import { ChatMessagesView } from "@/components/ChatMessagesView";
+import { Button } from "@/components/ui/button";
 
 export default function App() {
   const [processedEventsTimeline, setProcessedEventsTimeline] = useState<
@@ -14,7 +15,7 @@ export default function App() {
   >({});
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const hasFinalizeEventOccurredRef = useRef(false);
-
+  const [error, setError] = useState<string | null>(null);
   const thread = useStream<{
     messages: Message[];
     initial_search_query_count: number;
@@ -26,65 +27,127 @@ export default function App() {
       : "http://localhost:8123",
     assistantId: "agent",
     messagesKey: "messages",
-    onFinish: (event: any) => {
-      console.log(event);
-    },
     onUpdateEvent: (event: any) => {
+      // Add debugging to see what events we're receiving
+      console.log("Received LangGraph event:", event);
+      
       let processedEvent: ProcessedEvent | null = null;
-      if (event.generate_query) {
+      
+      // Handle new node-based events from the updated graph structure
+      if (event.decision_maker) {
+        const taskData = event.decision_maker;
+        let taskName = "Unknown Task";
+        let taskDescription = "Making a decision on next steps";
+        
+        console.log("Decision maker event:", taskData);
+        
+        if (taskData.next_task) {
+          if (typeof taskData.next_task === "string") {
+            taskName = taskData.next_task;
+            switch (taskData.next_task) {
+              case "ContextSearch":
+                taskDescription = "Initiating web research to gather information";
+                break;
+              case "GenerateOutline":
+                taskDescription = "Creating presentation outline structure";
+                break;
+              case "GenerateSlides":
+                taskDescription = "Generating slide content";
+                break;
+              default:
+                taskDescription = `Proceeding with ${taskData.next_task}`;
+            }
+          } else if (taskData.next_task && taskData.next_task.response) {
+            // FinalResponse object - this means the workflow will end soon
+            taskName = "Final Answer";
+            taskDescription = "Providing final response";
+            console.log("Final response detected, setting finalize flag");
+            hasFinalizeEventOccurredRef.current = true;
+          }
+        }
+        
+        processedEvent = {
+          title: `Decision: ${taskName}`,
+          data: taskData.reasoning || taskDescription,
+        };
+      } else if (event.generate_query) {
+        const queries = event.generate_query.query_list || [];
+        const queryTexts = queries.map((q: any) => q.query || q).join(", ");
         processedEvent = {
           title: "Generating Search Queries",
-          data: event.generate_query.query_list.join(", "),
+          data: queryTexts || "Creating search queries for research",
         };
       } else if (event.web_research) {
         const sources = event.web_research.sources_gathered || [];
         const numSources = sources.length;
-        const uniqueLabels = [
-          ...new Set(sources.map((s: any) => s.label).filter(Boolean)),
-        ];
-        const exampleLabels = uniqueLabels.slice(0, 3).join(", ");
+        const searchQuery = event.web_research.search_query?.[0] || "research topic";
         processedEvent = {
           title: "Web Research",
-          data: `Gathered ${numSources} sources. Related to: ${
-            exampleLabels || "N/A"
-          }.`,
+          data: `Researching "${searchQuery}" - Gathered ${numSources} sources`,
         };
       } else if (event.reflection) {
+        const reflectionData = event.reflection;
+        let analysisResult = "Analyzing research results";
+        
+        if (reflectionData.is_sufficient !== undefined) {
+          if (reflectionData.is_sufficient) {
+            analysisResult = "Research complete - sufficient information gathered";
+          } else {
+            const gapInfo = reflectionData.knowledge_gap ? ` - ${reflectionData.knowledge_gap}` : "";
+            analysisResult = `Need more research${gapInfo}`;
+          }
+        }
+        
         processedEvent = {
           title: "Reflection",
-          data: event.reflection.is_sufficient
-            ? "Search successful, generating presentation outline."
-            : `Need more information, searching for ${event.reflection.follow_up_queries.join(
-                ", "
-              )}`,
+          data: analysisResult,
         };
       } else if (event.generate_outline) {
-        const outlines = event.generate_outline.outline_list || [];
+        const outlineData = event.generate_outline;
+        const numOutlines = outlineData.unused_outline_list?.length || 0;
+        const message = outlineData.task_message?.[0] || `Generated ${numOutlines} slide outlines`;
+        
         processedEvent = {
-          title: "Generating Presentation Outline",
-          data: `Created ${outlines.length} slide topics: ${outlines.slice(0, 3).join(", ")}${outlines.length > 3 ? "..." : ""}`,
+          title: "Generating Outline",
+          data: message,
         };
-      } else if (event.generate_slides) {
-        const slide = event.generate_slides.slides?.[0];
+      } else if (event.generate_slide_content) {
+        const slideData = event.generate_slide_content;
+        const slideCount = slideData.slides?.length || 0;
+        const topic = slideData.processed_outline_list?.[0] || "slide content";
+        const message = slideData.task_message?.[0] || `Generated ${slideCount} slide(s) for "${topic}"`;
+        
         processedEvent = {
           title: "Generating Slide Content",
-          data: slide ? `Created slide: "${slide.title}"` : "Generating slide content...",
+          data: message,
         };
-        // Mark as finalized when slides are generated
-        hasFinalizeEventOccurredRef.current = true;
-      } else if (event.finalize_answer) {
+      } else if (event.cleanup_outline_list) {
         processedEvent = {
-          title: "Finalizing Answer",
-          data: "Composing and presenting the final answer.",
+          title: "Processing Outlines",
+          data: "Organizing outline structure",
         };
-        hasFinalizeEventOccurredRef.current = true;
+      } else if (event.reset_task_messages) {
+        processedEvent = {
+          title: "Finalizing",
+          data: "Completing workflow and cleaning up",
+        };
+        // Don't set finalize flag here - it should already be set by decision_maker
+        console.log("Reset task messages event - workflow completing");
       }
+      
       if (processedEvent) {
-        setProcessedEventsTimeline((prevEvents) => [
-          ...prevEvents,
-          processedEvent!,
-        ]);
+        console.log("Adding processed event to timeline:", processedEvent);
+        setProcessedEventsTimeline((prevEvents) => {
+          const newEvents = [...prevEvents, processedEvent!];
+          console.log("Updated timeline events:", newEvents);
+          return newEvents;
+        });
+      } else {
+        console.log("No processed event created for:", event);
       }
+    },
+    onError: (error: any) => {
+      setError(error.message);
     },
   });
 
@@ -100,17 +163,28 @@ export default function App() {
   }, [thread.messages]);
 
   useEffect(() => {
+    console.log("Finalization useEffect triggered:", {
+      hasFinalizeEvent: hasFinalizeEventOccurredRef.current,
+      isLoading: thread.isLoading,
+      messagesLength: thread.messages.length,
+      timelineLength: processedEventsTimeline.length
+    });
+    
     if (
       hasFinalizeEventOccurredRef.current &&
       !thread.isLoading &&
       thread.messages.length > 0
     ) {
       const lastMessage = thread.messages[thread.messages.length - 1];
+      console.log("Last message:", lastMessage);
+      
       if (lastMessage && lastMessage.type === "ai" && lastMessage.id) {
+        console.log("Saving timeline to historical activities:", processedEventsTimeline);
         setHistoricalActivities((prev) => ({
           ...prev,
           [lastMessage.id!]: [...processedEventsTimeline],
         }));
+        console.log("Timeline saved, resetting finalize flag");
       }
       hasFinalizeEventOccurredRef.current = false;
     }
@@ -119,6 +193,7 @@ export default function App() {
   const handleSubmit = useCallback(
     (submittedInputValue: string, effort: string, model: string) => {
       if (!submittedInputValue.trim()) return;
+      console.log("Clearing timeline for new submission");
       setProcessedEventsTimeline([]);
       hasFinalizeEventOccurredRef.current = false;
 
@@ -168,18 +243,27 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-neutral-800 text-neutral-100 font-sans antialiased">
-      <main className="flex-1 flex flex-col overflow-hidden max-w-4xl mx-auto w-full">
-        <div
-          className={`flex-1 overflow-y-auto ${
-            thread.messages.length === 0 ? "flex" : ""
-          }`}
-        >
+      <main className="h-full w-full max-w-4xl mx-auto">
           {thread.messages.length === 0 ? (
             <WelcomeScreen
               handleSubmit={handleSubmit}
               isLoading={thread.isLoading}
               onCancel={handleCancel}
             />
+          ) : error ? (
+            <div className="flex flex-col items-center justify-center h-full">
+              <div className="flex flex-col items-center justify-center gap-4">
+                <h1 className="text-2xl text-red-400 font-bold">Error</h1>
+                <p className="text-red-400">{JSON.stringify(error)}</p>
+
+                <Button
+                  variant="destructive"
+                  onClick={() => window.location.reload()}
+                >
+                  Retry
+                </Button>
+              </div>
+            </div>
           ) : (
             <ChatMessagesView
               messages={thread.messages}
@@ -191,7 +275,6 @@ export default function App() {
               historicalActivities={historicalActivities}
             />
           )}
-        </div>
       </main>
     </div>
   );

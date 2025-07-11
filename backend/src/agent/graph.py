@@ -80,7 +80,8 @@ def decision_maker(state: OverallState, config: RunnableConfig) -> OverallState:
         return {
             "next_task": result.next_task,  # Set the FinalResponse object
             "text_response": [result.next_task.response],  # Also set the response text
-            "reasoning": result.reasoning
+            "reasoning": result.reasoning,
+            "messages": [AIMessage(content=result.next_task.response)],
         }
     else:
         return {
@@ -432,7 +433,7 @@ def graph_builder(genai_client: Client):
     builder.add_conditional_edges(
         "decision_maker", 
         continue_to_next_task, 
-        ["generate_outline", "generate_slide_content", "reset_task_messages"]
+        ["generate_outline", "generate_slide_content", "generate_query", "reset_task_messages"]
     )
     
     # Web research flow (when ContextSearch task is selected)
