@@ -417,14 +417,13 @@ def graph_builder(genai_client: Client):
 
     # Define the nodes
     builder.add_node("decision_maker", decision_maker)
-    # builder.add_node("generate_query", generate_query)
-    # builder.add_node("web_research", web_research)
-    # builder.add_node("reflection", reflection)
+    builder.add_node("generate_query", generate_query)
+    builder.add_node("web_research", web_research)
+    builder.add_node("reflection", reflection)
     builder.add_node("generate_outline", generate_outline)
     builder.add_node("generate_slide_content", generate_slide_content)
     builder.add_node("cleanup_outline_list", cleanup_outline_list)
     builder.add_node("reset_task_messages", reset_task_messages)
-    # builder.add_node("evaluate_slides", evaluate_slides)
     
     # Entry point
     builder.add_edge(START, "decision_maker")
@@ -437,27 +436,20 @@ def graph_builder(genai_client: Client):
     )
     
     # Web research flow (when ContextSearch task is selected)
-    # builder.add_conditional_edges(
-    #     "generate_query", continue_to_web_research, ["web_research"]
-    # )
-    # builder.add_edge("web_research", "reflection")
-    # builder.add_conditional_edges(
-    #     "reflection", evaluate_research, ["web_research", "decision_maker"]
-    # )
+    builder.add_conditional_edges(
+        "generate_query", continue_to_web_research, ["web_research"]
+    )
+    builder.add_edge("web_research", "reflection")
+    builder.add_conditional_edges(
+        "reflection", evaluate_research, ["web_research", "decision_maker"]
+    )
     
     # Outline generation flow (when GenerateOutline task is selected)
     builder.add_edge("generate_outline", "decision_maker")
     builder.add_edge("generate_slide_content", "cleanup_outline_list")
     builder.add_edge("cleanup_outline_list", "decision_maker")
     builder.add_edge("reset_task_messages", END)
-    # Slide generation flow (when GenerateSlides task is selected)
-    # builder.add_conditional_edges(
-    #     "decision_maker", 
-    #     continue_to_slide_generation,
-    #     ["generate_slide_content", END]
-    # )
-    # builder.add_edge("generate_slide_content", "evaluate_slides")
-    # builder.add_edge("evaluate_slides", END)
+
 
     return builder.compile(name="pro-search-agent")
 
