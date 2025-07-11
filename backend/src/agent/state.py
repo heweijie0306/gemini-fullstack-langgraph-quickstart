@@ -11,23 +11,13 @@ import operator
 from dataclasses import dataclass, field
 from typing_extensions import Annotated
 
-
-
-
-def outline_reducer(current: list, update) -> list:
-    """Simple reducer: if update is a dict, remove it from the list"""
-    if current is None:
-        current = []
-    
-    if isinstance(update, dict):
-        # Remove the dict from current list
-        return [item for item in current if item != update]
-    elif isinstance(update, list):
-        # Normal list operations
-        return current + update
-    else:
-        # Single item append
-        return current + [update]
+def reduce_with_overwrite(left, right):
+    if left is None:
+        left = []
+    if not right:
+        # Overwrite with empty list
+        return []
+    return left + right
 
 
 class OverallState(TypedDict):
@@ -41,7 +31,7 @@ class OverallState(TypedDict):
     slides: Annotated[list, operator.add]
     slide_count: int
     initial_search_query_count: int
-    max_research_loops: int
+    max_research_loops: int = 1
     research_loop_count: int
     reasoning_model: str
     summary: str
@@ -49,7 +39,8 @@ class OverallState(TypedDict):
     reasoning: str
     executed_tasks: list
     processed_outline_list: Annotated[list, operator.add]
-    unused_outline_list: Annotated[list, outline_reducer]
+    unused_outline_list: list
+    task_message: Annotated[list, reduce_with_overwrite]
 
 class ReflectionState(TypedDict):
     is_sufficient: bool

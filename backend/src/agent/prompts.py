@@ -378,5 +378,4 @@ Now analyze the current situation and decide the next step:
 - User's original request: {research_topic}
 - Processed outlines: {processed_outline_list}
 - Current state: outline_list: {unused_outline_list}, slides: {slides}, search_result: {search_result}
-- Completed tasks: {executed_tasks}
 """
