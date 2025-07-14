@@ -2,11 +2,13 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
+import json
 from typing import List, Dict, Any, Optional
 import json
-from agent.tools_and_schemas import SearchQueryList, Reflection, SlideContent, Decision, FinalResponse, EditContent, GenerateSlides, OutlineList
+from langgraph.prebuilt import create_react_agent
+from agent.tools_and_schemas import SearchQueryList, Reflection, SlideContent, Decision, FinalResponse, EditContent, GenerateSlides, OutlineList, tavily_search, url_extract
 from dotenv import load_dotenv
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.types import Send
 from langgraph.graph import StateGraph
 from langgraph.graph import START, END
@@ -73,22 +75,26 @@ def decision_maker(state: OverallState, config: RunnableConfig) -> OverallState:
         research_topic=get_research_topic(state["messages"]),
         executed_tasks=state.get("executed_tasks", [])
     )
+    print(f"state: {state.get('messages')}")
+    print(f"formatted_prompt: {formatted_prompt}")
     llm = get_llm(reasoning_model, 1.0)
-    result = llm.with_structured_output(Decision).invoke(formatted_prompt)
-    
+    main_agent = create_react_agent(llm, response_format=Decision, tools=[tavily_search, url_extract])
+    result = main_agent.invoke({"messages": [SystemMessage(content=formatted_prompt),
+                                             *state.get("messages", [])]})
+    print(f"result_structured: {result['structured_response'].next_task}")
+    # result = llm.with_structured_output(Decision).invoke(formatted_prompt)
     # Always set next_task, and optionally set text_response for FinalResponse
-    if isinstance(result.next_task, FinalResponse):
+    if isinstance(result['structured_response'].next_task, FinalResponse):
         return {
-            "next_task": result.next_task,  # Set the FinalResponse object
-            "text_response": [result.next_task.response],  # Also set the response text
-            "reasoning": result.reasoning,
-            "messages": [AIMessage(content=result.reasoning + "\n" + result.next_task.response)],
+            "next_task": result['structured_response'].next_task,  # Set the FinalResponse object
+            "text_response": [result['structured_response'].next_task.response],  # Also set the response text
+            "reasoning": result['structured_response'].reasoning,
+            "messages": [AIMessage(content=result['structured_response'].next_task.response)],
         }
     else:
         return {
-            "next_task": result.next_task,
-            "reasoning": result.reasoning,
-            "messages": [AIMessage(content=result.reasoning)],
+            "next_task": result['structured_response'].next_task,
+            "reasoning": result['structured_response'].reasoning
         }
 
 def continue_to_next_task(state: OverallState):
