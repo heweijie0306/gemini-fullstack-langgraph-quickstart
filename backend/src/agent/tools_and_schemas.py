@@ -1,6 +1,42 @@
 from typing import List, Union, Literal, Optional
 from pydantic import BaseModel, Field
+from tavily import TavilyClient
+import os
+from langchain_core.tools import tool
 
+
+@tool
+def tavily_search(query: str, search_depth: str = "advanced", topic: str = "general") -> str:
+    """
+    Search the web for information using the Tavily API.
+    Args:
+        query: The search query to be used for web research.
+        search_depth: The depth of the search. Could be "basic", "advanced".
+        topic: The topic of the search. Could be "general", "news"
+    Returns:
+        A object containing the search results.
+    """
+    client = TavilyClient("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")
+    response = client.search(
+        query=query,
+        search_depth=search_depth,
+        topic=topic,
+    )
+    return response
+
+@tool
+def url_extract(url: str, extract_depth: str = "basic") -> str:
+    """
+    Extract the content of a URL using the Tavily API.
+    Args:
+        url: The URL to be extracted.
+        extract_depth: The depth of the extraction. Could be "basic", "advanced".
+    Returns:
+        A object containing the extracted content.
+    """
+    client = TavilyClient("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")
+    response = client.extract(url)
+    return response
 
 class SearchQueryList(BaseModel):
     query: List[str] = Field(
@@ -36,17 +72,19 @@ class OutlineList(BaseModel):
     outlines: List[Outline] = Field(
         description="A list of slide outlines, each representing a specific topic or section for presentation slides."
     )
-
+    response: str = Field(
+        description="A brief response indicating that the outlines have been generated."
+    )
 
 
 class SlideContent(BaseModel):
-    title: str = Field(
-        description="The title of the slide."
-    )
+
     content: str = Field(
         description="The detailed content of the slide, formatted in markdown."
     )
-
+    response: str = Field(
+        description="A brief response indicating that the slide content has been generated."
+    )
 class Task(BaseModel):
     task: Optional[Union[Literal["ContextSearch"], Literal["GenerateOutline"], Literal["GenerateSlides"]]] = Field(
         description="A task to be completed."
@@ -69,3 +107,6 @@ class Decision(BaseModel):
     ] = Field(                      
         description="The next task to be completed as a string, or a FinalResponse object if workflow is complete."
     )
+
+
+
