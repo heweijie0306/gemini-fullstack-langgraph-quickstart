@@ -16,14 +16,14 @@ class Configuration(BaseModel):
     )
 
     reflection_model: str = Field(
-        default="google/gemini-2.5-flash-preview-05-20",
+        default="google/gemini-2.5-flash",
         metadata={
             "description": "The name of the language model to use for the agent's reflection."
         },
     )
 
     answer_model: str = Field(
-        default="google/gemini-2.5-flash-preview-05-20",
+        default="google/gemini-2.5-flash",
         metadata={
             "description": "The name of the language model to use for the agent's answer."
         },
@@ -40,7 +40,7 @@ class Configuration(BaseModel):
     )
 
     reasoning_model: str = Field(
-        default="google/gemini-2.5-flash-preview-05-20",
+        default="google/gemini-2.5-flash",
         metadata={"description": "The name of the language model to use for the agent's reasoning."},
     )
 

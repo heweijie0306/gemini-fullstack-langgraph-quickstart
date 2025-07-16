@@ -3,8 +3,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-
-from agent.tools_and_schemas import SearchQueryList, Reflection, OutlineList, SlideContent, Decision, FinalResponse
+import json
+from agent.tools_and_schemas import SearchQueryList, Reflection, SlideContent, Decision, FinalResponse, EditContent, GenerateSlides, OutlineList
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage
 from langgraph.types import Send
@@ -32,6 +32,7 @@ from agent.prompts import (
     outline_generation_instructions,
     slide_generation_instructions,
     task_list_generation_instructions,
+    editor_instructions,
 )
 from langchain_google_genai import ChatGoogleGenerativeAI
 from agent.utils import (
@@ -63,14 +64,14 @@ def decision_maker(state: OverallState, config: RunnableConfig) -> OverallState:
     reasoning_model = state.get("reasoning_model") or configurable.reasoning_model
     # Format the prompt
     current_date = get_current_date()
+    print(f"executed_tasks: {state.get('executed_tasks', [])}")
     formatted_prompt = task_list_generation_instructions.format(
         current_date=current_date,
         search_result="\n---\n\n".join(state.get("web_research_result", [])),
-        processed_outline_list=state.get("processed_outline_list", []),
-        unused_outline_list=state.get("unused_outline_list", []),
-        slides=state.get("slides", []),
+        # processed_outline_list=state.get("processed_outline_list", []),
+        # slides=state.get("slides", []),
         research_topic=get_research_topic(state["messages"]),
-        task_message=state.get("task_message", [])
+        executed_tasks=state.get("executed_tasks", [])
     )
     llm = get_llm(reasoning_model, 1.0)
     result = llm.with_structured_output(Decision).invoke(formatted_prompt)
@@ -81,21 +82,25 @@ def decision_maker(state: OverallState, config: RunnableConfig) -> OverallState:
             "next_task": result.next_task,  # Set the FinalResponse object
             "text_response": [result.next_task.response],  # Also set the response text
             "reasoning": result.reasoning,
-            "messages": [AIMessage(content=result.next_task.response)],
+            "messages": [AIMessage(content=result.reasoning + "\n" + result.next_task.response)],
         }
     else:
         return {
             "next_task": result.next_task,
-            "reasoning": result.reasoning
+            "reasoning": result.reasoning,
+            "messages": [AIMessage(content=result.reasoning)],
         }
 
 def continue_to_next_task(state: OverallState):
-    if state["next_task"] == "ContextSearch":
+    next_task = state["next_task"]
+    if next_task == "ContextSearch":
         return "generate_query"
-    elif state["next_task"] == "GenerateOutline":
+    elif next_task == "GenerateOutline":
         return "generate_outline"
-    elif state["next_task"] == "GenerateSlides":
-        if state.get("unused_outline_list"):
+    elif next_task == "EditContent":
+        return "editor"
+    elif isinstance(next_task, GenerateSlides):
+        if next_task.outline_list:
             # Return Send objects for fan-out - each gets its own topic
             return [
                 Send("generate_slide_content", {
@@ -104,17 +109,12 @@ def continue_to_next_task(state: OverallState):
                     "web_research_result": state["web_research_result"],
                     "slides": state.get("slides", []),
                     "reasoning_model": state.get("reasoning_model"),
-                    "executed_tasks": state.get("executed_tasks", [])
                 })
-                for idx, outline in enumerate(state["unused_outline_list"])
-                if outline not in state["processed_outline_list"]
+                for idx, outline in enumerate(next_task.outline_list)
             ]
         else:
-            return Send("generate_slide_content", {
-            "outline_topic": get_research_topic(state["messages"]),
-            "web_research_result": state["web_research_result"],
-        })
-    elif isinstance(state["next_task"], FinalResponse):
+            return "decision_maker"
+    elif isinstance(next_task, FinalResponse):
         return "reset_task_messages"
     
 def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
@@ -289,7 +289,21 @@ def evaluate_research(
         ]
 
 
-
+def editor(state:OverallState, config: Configuration) -> OverallState:
+    configurable = Configuration.from_runnable_config(config)
+    reasoning_model = state.get("reasoning_model") or configurable.reasoning_model
+    llm = get_llm(reasoning_model, 0.3)
+    formatted_prompt = editor_instructions.format(
+        current_date=get_current_date(),
+        research_topic=get_research_topic(state["messages"]),
+        slides=state.get("slides", []),
+    )
+    result = llm.with_structured_output(EditContent).invoke(formatted_prompt)
+    return {
+        "edited_content": result.content,
+        "messages": [AIMessage(content=result.response)]
+    }
+    
 def generate_outline(state: OverallState, config: RunnableConfig) -> OutlineGenerationState:
     """LangGraph node that generates presentation slide outlines based on research findings.
 
@@ -311,8 +325,6 @@ def generate_outline(state: OverallState, config: RunnableConfig) -> OutlineGene
     formatted_prompt = outline_generation_instructions.format(
         current_date=current_date,
         research_topic=get_research_topic(state["messages"]),
-        processed_outline_list=state.get("processed_outline_list", []),
-        unused_outline_list=state.get("unused_outline_list", []),
         summaries="\n---\n\n".join(state["web_research_result"]),
     )
 
@@ -320,19 +332,10 @@ def generate_outline(state: OverallState, config: RunnableConfig) -> OutlineGene
     llm = get_llm(reasoning_model, 0.3)
     result = llm.with_structured_output(OutlineList).invoke(formatted_prompt)
 
-    return {"unused_outline_list": state.get("unused_outline_list", []) + result.outlines, 
-            "task_message": [result.response],
-            "executed_tasks": state.get("executed_tasks", []) + ["GenerateOutline"]}
+    return {
+            "executed_tasks": state.get("executed_tasks", []) + [result],
+            "messages": [AIMessage(content="Outline_generator: " + json.dumps(result.dict(), indent=2))]}
 
-def evaluate_outline(state: OverallState, config: RunnableConfig) -> OverallState:
-    """LangGraph node that evaluates the outline and asks for human feedback.
-
-    Uses Gemini 2.0 Flash to evaluate the outline and asks for human feedback.
-    """
-    if state["outline_list"]:
-        return "decision_maker"
-    else:
-        return END
 
 # def continue_to_slide_generation(state: OverallState):
 #     """LangGraph node that sends outlines to slide generation nodes.
@@ -384,31 +387,38 @@ def generate_slide_content(state: OverallState, config: RunnableConfig) -> Overa
 
     slide_data = {  
         "content": result.content,
+        "response": result.response
     }
 
     return {
         "slides": [slide_data],
-        "task_message":[result.response],
-        "processed_outline_list": [state["outline_topic"]]
+        "processed_outline_list": [state["outline_topic"]],
+        "messages": [AIMessage(content=result.response)]
     }
 
+# def evaluate_slides_and_cleanup(state: OverallState, config: RunnableConfig) -> OverallState:
+#     configurable = Configuration.from_runnable_config(config)
+#     reasoning_model = state.get("reasoning_model") or configurable.reasoning_model
+#     llm = get_llm(reasoning_model, 0.3)
+#     formatted_prompt = evaluate_slides_and_cleanup_instructions.format(
+#         current_date=get_current_date(),
+#         research_topic=get_research_topic(state["messages"]),
+#         target_outlines=state.get("GenerateSlides", []),
+#         slides=state.get("slides", []),
+#     )
+#     result = llm.with_structured_output(GenerateSlidesResponse).invoke(formatted_prompt)
+#     return {
+#         "executed_tasks": state.get("executed_tasks", []) + [GenerateSlidesResponse],
+#         "unused_outline_list": [],
+#     }
 
-def cleanup_outline_list(state: OverallState) -> OverallState:
-    """Remove processed topics from unused_outline_list"""
-    processed = state.get("processed_outline_list", [])
-    current_unused = state.get("unused_outline_list", [])
-    
-    # Remove all processed topics
-    updated_unused = [topic for topic in current_unused if topic not in processed]
-    
+def evaluate_slides_and_cleanup(state: OverallState, config: RunnableConfig) -> OverallState:
     return {
-        "unused_outline_list": updated_unused,
-        "processed_outline_list": []  
+        "executed_tasks": state.get("executed_tasks", []) + ["GenerateSlides"],
     }
-
 def reset_task_messages(state: OverallState) -> OverallState:
     return {
-        "task_message": []
+        "executed_tasks": []
     }
     
 
@@ -423,9 +433,9 @@ def graph_builder(genai_client: Client):
     builder.add_node("reflection", reflection)
     builder.add_node("generate_outline", generate_outline)
     builder.add_node("generate_slide_content", generate_slide_content)
-    builder.add_node("cleanup_outline_list", cleanup_outline_list)
+    builder.add_node("evaluate_slides_and_cleanup", evaluate_slides_and_cleanup)
     builder.add_node("reset_task_messages", reset_task_messages)
-    
+    builder.add_node("editor", editor)
     # Entry point
     builder.add_edge(START, "decision_maker")
     
@@ -433,8 +443,9 @@ def graph_builder(genai_client: Client):
     builder.add_conditional_edges(
         "decision_maker", 
         continue_to_next_task, 
-        ["generate_outline", "generate_slide_content", "generate_query", "reset_task_messages"]
+        ["generate_outline", "generate_slide_content",  "generate_query", "reset_task_messages", "editor"]
     )
+    builder.add_edge("editor", "decision_maker")
     
     # Web research flow (when ContextSearch task is selected)
     builder.add_conditional_edges(
@@ -447,8 +458,8 @@ def graph_builder(genai_client: Client):
     
     # Outline generation flow (when GenerateOutline task is selected)
     builder.add_edge("generate_outline", "decision_maker")
-    builder.add_edge("generate_slide_content", "cleanup_outline_list")
-    builder.add_edge("cleanup_outline_list", "decision_maker")
+    builder.add_edge("generate_slide_content", "evaluate_slides_and_cleanup")
+    builder.add_edge("evaluate_slides_and_cleanup", "decision_maker")
     builder.add_edge("reset_task_messages", END)
 
 

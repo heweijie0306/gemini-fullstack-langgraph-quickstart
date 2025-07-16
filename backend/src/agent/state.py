@@ -41,7 +41,7 @@ class OverallState(TypedDict):
     processed_outline_list: Annotated[list, operator.add]
     unused_outline_list: list
     task_message: Annotated[list, reduce_with_overwrite]
-
+    execute_outline: list
 class ReflectionState(TypedDict):
     is_sufficient: bool
     knowledge_gap: str

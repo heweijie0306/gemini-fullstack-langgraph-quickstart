@@ -36,15 +36,18 @@ class OutlineList(BaseModel):
     outlines: List[Outline] = Field(
         description="A list of slide outlines, each representing a specific topic or section for presentation slides."
     )
+    response: str = Field(
+        description="A brief short response to indicate the completion of the outlines generation."
+    )
 
 
 
 class SlideContent(BaseModel):
-    title: str = Field(
-        description="The title of the slide."
-    )
     content: str = Field(
         description="The detailed content of the slide, formatted in markdown."
+    )
+    response: str = Field(
+        description="A brief short response to indicate the completion of the slide generation."
     )
 
 class Task(BaseModel):
@@ -57,15 +60,30 @@ class FinalResponse(BaseModel):
         description="The final response to the user when no more tasks need to be completed."
     )
 
+class GenerateSlides(BaseModel):
+    outline_list: List[str] = Field(
+        description="A list of slide outlines picked from the unused_outline_list or your own that will be used to generate slides, each representing a specific topic or section for presentation slides. Can never be empty."
+    )
+
 class Decision(BaseModel):
     reasoning: str = Field(
         description="Brief explanation of your next move based on the current state and user request."
     )
     next_task: Union[
         Literal["ContextSearch"], 
-        Literal["GenerateOutline"]                   , 
-        Literal["GenerateSlides"],
+        Literal["GenerateOutline"],
+        Literal["EditContent"],
+        GenerateSlides,
         FinalResponse
     ] = Field(                      
-        description="The next task to be completed as a string, or a FinalResponse object if workflow is complete."
+        description="The next task to be completed as a object if workflow is complete."
+    )
+
+
+class EditContent(BaseModel):
+    content: str = Field(
+        description="The content of the slide"
+    )
+    response: str = Field(
+        description="A brief short response to indicate the completion of the slide generation."
     )

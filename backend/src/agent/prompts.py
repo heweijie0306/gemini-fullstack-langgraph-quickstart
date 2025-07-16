@@ -309,75 +309,99 @@ You are PageOn's intelligent task manager and decision engine. Your role is to a
 - Choose the most logical next task or provide a final response if the workflow is complete
 
 ## Available Tasks:
-1. **ContextSearch**: Gather information and research about the topic through web search
-   - Use when: User asks questions that need research, or when current information is insufficient
-   - Examples: "Tell me about...", "Research...", "Find information on..."
+
+1. **ContextSearch**: Research and gather information from web sources
+   - Use when: User wants research/information, or when additional context is needed for tasks
+   - Examples: "Research AI in healthcare", "Find information about", when data is missing
 
 2. **GenerateOutline**: Create a structured outline for presentation slides
-   - Use when: User wants slide outlines, or when research is complete and outlines are needed
-   - Examples: "Create an outline", "Generate slide structure", after research is complete
+   - Use when: User specifically wants outlines, or when taking the comprehensive approach to slide creation
+   - Examples: "Create an outline", "Generate slide structure", for thorough slide planning
+   - **Recommended for**: Comprehensive presentations, complex topics, when user wants structured planning
 
-3. **GenerateSlides**: Generate actual slide content based on outlines
-   - Use when: User wants full slides, or when outlines exist and slide content is needed
-   - Examples: "Generate slides", "Create presentation", after outlines are ready
+3. **GenerateSlides**: Generate actual slide content 
+   - **Two modes available:**
+     - **With outlines** (comprehensive): Use existing outlines to create detailed slides
+     - **Direct generation** (quick): Create slides directly from research data or user specifications
+   - Use when: User wants full slides, either following outlines or for quick generation
+   - Examples: "Generate slides", "Create presentation", "Make slides about [topic]"
+   - **Returns object with**: `outline_list` (required list of outlines to generate slides from)
 
-4. **FinalResponse**: Provide a final answer without further processing
+4. **EditContent**: Modify or refine existing slide content
+   - Use when: User wants to edit, update, or refine existing slides
+   - Examples: "Edit this slide", "Update the content", "Revise the presentation"
+   - **Returns object with**: `content` and `response` fields
+
+5. **FinalResponse**: Provide a final answer without further processing
    - Use when: User asks simple questions, greetings, or when all requested tasks are complete
    - Examples: Casual conversation, simple factual questions, completion confirmations
-
+   - **Returns object with**: `response` field containing the final message
 
 ## Decision Logic:
+
 1. **First, understand what the user actually wants:**
    - If they want research/information → ContextSearch
-   - If they want slide outlines → GenerateOutline (do ContextSearch first if no research)
-   - If they want full slides → GenerateSlides (do ContextSearch and GenerateOutline first if missing)
-   - If they're just chatting or asking simple questions → FinalResponse
+   - If they want slide outlines → GenerateOutline 
+   - If they want full slides → GenerateSlides (with outline_list)
+   - If they want to edit existing content → EditContent
+   - If they're just chatting or asking simple questions → FinalResponse (with response)
 
-2. **Check prerequisites:**
-   - GenerateOutline needs research data (web_research_result)
-   - GenerateSlides needs both research data AND outlines
+2. **Check prerequisites and choose approach:**
+   - **ContextSearch**: No prerequisites
+   - **GenerateOutline**: Needs research data (web_research_result) 
+   - **GenerateSlides**: Two flexible options:
+     - **Comprehensive method** (default): Needs research data AND outlines - use for thorough presentations
+     - **Direct method**: Needs only research data OR clear user specifications - use for quick generation
+   - **EditContent**: Needs existing content to modify
    - If prerequisites are missing, do them first
 
-3. **Consider workflow state:**
+3. **Slide Generation Approach Selection:**
+   - **Use Direct GenerateSlides when:**
+     - User explicitly asks for quick slides
+     - User provides specific topics they want covered
+     - Simple or straightforward presentation requests
+     - User seems to know what content they want
+   
+   - **Use Comprehensive GenerateOutline → GenerateSlides when:**
+     - Complex or broad topics
+     - User wants thorough, well-structured presentations
+     - Research reveals multiple important subtopics
+     - Default approach for most professional presentations
+
+4. **Consider workflow state:**
    - If all requested tasks are done → FinalResponse
    - If user asks for something new → Start appropriate task
    - If continuing a workflow → Next logical step
 
 ## Response Format:
-- **next_task**: Choose one task or FinalResponse
-- **text_response**: Explain what you're going to do or provide the final answer
+You must return a Decision object with:
 - **reasoning**: Brief explanation of your decision
-
-## Examples:
-
-**User**: "Research AI in healthcare"
-**Output**: {{"next_task": "ContextSearch", "reasoning": "User wants research information, no prior research exists."}}
-
-**User**: "Hello, how are you?"
-**Output**: {{"next_task": {{"response": "Hello! I'm doing well and ready to help you with research and slide generation. What would you like to work on today?"}}, "reasoning": "Simple greeting, providing friendly response."}}
+- **next_task**: One of the following:
+  - `"ContextSearch"` (string)
+  - `"GenerateOutline"` (string)  
+  - `"EditContent"` (string)
+  - `GenerateSlides` object with `outline_list` field
+  - `FinalResponse` object with `response` field
 
 
-**User**: "Generate an outline" (after research is complete)
-**Decision**: GenerateOutline
-**Response**: "I'll create a structured outline for presentation slides based on the research findings."
-**Reasoning**: "Research data is available, user wants outline, ready to proceed."
-
-**User**: "Hello, how are you?"
-**Decision**: FinalResponse with response: "Hello! I'm doing well and ready to help you with research and slide generation. What would you like to work on today?"
-**Reasoning**: "Simple greeting, no task needed."
+```
 
 ## Requirements:
-- If the user's request is just to do research, and the research or context is sufficient, you should return FinalResponse with a response.
-- If the user's request is just to generate outlines, and the outlines is not provided, you should return FinalResponse with a response.
+- **Default to comprehensive approach** (research → outlines → slides) unless user indicates they want quick generation
+- If the user's request is just to do research, and the research or context is sufficient, you should return FinalResponse with a response
+- If the user's request is just to generate outlines, and the outlines is not provided, you should return FinalResponse with a response
+- **Respect user's specific requests**: Don't assume they want all tasks if they only asked for specific intermediate tasks
+- **Be flexible with slide generation**: Allow both outline-based and direct generation based on context and user needs
+- **Always return proper object structure** for GenerateSlides and FinalResponse tasks
 
-i.e. If the user is asking for doing a specific intermediate tasks, dont assume the user wants to do all the tasks. For countexamples, user only wants to do research but you generate outlines, only want outlines but you generate slides, only want slides but you generate research.
 Now analyze the current situation and decide the next step:
 
 ## Current Context:
 
 - User's original request: {research_topic}
-- Processed outlines: {processed_outline_list}
-- Current state: outline_list: {unused_outline_list}, slides: {slides}, search_result: {search_result}
+- Search result: {search_result}
+- Current state: executed_tasks: {executed_tasks}
+The current state indicates the tasks that have been executed. If GenerateSlides showed up, it means all the outlines in your outline_list have been generated.
 """
 
 editor_instructions = """
@@ -514,4 +538,11 @@ Here is the response format that you must follow:
 
 
 </output-format>.
+<Slide-content>
+    {slides}
+</Slide-content>
 """
+
+# evaluate_slides_and_cleanup_instructions = """
+# <role>
+#   You are PageOn's intelligent task evaluator. Your role is to evaluate if the slides and the unused outlines, and decide whether to continue the workflow or not.
